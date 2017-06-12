@@ -51,6 +51,7 @@ const (
 	// Special cluster name which denotes all clusters - only used internally.  It's not a valid cluster name, so effectively reserved.
 	allClustersKey = ".ALL_CLUSTERS"
 	// TODO: Get the constants below directly from the Kubernetes Ingress Controller constants - but thats in a separate repo
+	globalIngressType 	= "kubernetes.io/ingress.global-type" 		// The writable annotation on Ingress to tell the controller to use a global ingress types
 	staticIPNameKeyWritable = "kubernetes.io/ingress.global-static-ip-name" // The writable annotation on Ingress to tell the controller to use a specific, named, static IP
 	staticIPNameKeyReadonly = "ingress.kubernetes.io/static-ip"             // The readonly key via which the cluster's Ingress Controller communicates which static IP it used.  If staticIPNameKeyWritable above is specified, it is used.
 	uidAnnotationKey        = "kubernetes.io/ingress.uid"                   // The annotation on federation clusters, where we store the ingress UID
@@ -736,6 +737,8 @@ func (ic *IngressController) reconcileIngress(ingress types.NamespacedName) {
 
 	operations := make([]util.FederatedOperation, 0)
 
+	_, baseGlobalTypeExists := baseIngress.ObjectMeta.Annotations[globalIngressType]
+
 	for _, cluster := range clusters {
 		baseIPName, baseIPAnnotationExists := baseIngress.ObjectMeta.Annotations[staticIPNameKeyWritable]
 		firstClusterName, firstClusterExists := baseIngress.ObjectMeta.Annotations[firstClusterAnnotation]
@@ -792,7 +795,7 @@ func (ic *IngressController) reconcileIngress(ingress types.NamespacedName) {
 				ic.updateAnnotationOnIngress(baseIngress, firstClusterAnnotation, cluster.Name)
 				return
 			}
-			if baseIPAnnotationExists || firstClusterName == cluster.Name {
+			if baseIPAnnotationExists || !baseGlobalTypeExists || firstClusterName == cluster.Name {
 				if baseIPAnnotationExists {
 					glog.V(4).Infof("No existing Ingress %s in cluster %s and static IP annotation (%q) exists on base ingress - queuing a create operation", ingress, cluster.Name, staticIPNameKeyWritable)
 				} else {
