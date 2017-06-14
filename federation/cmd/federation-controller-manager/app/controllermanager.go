@@ -39,6 +39,7 @@ import (
 	clustercontroller "k8s.io/kubernetes/federation/pkg/federation-controller/cluster"
 	deploymentcontroller "k8s.io/kubernetes/federation/pkg/federation-controller/deployment"
 	ingresscontroller "k8s.io/kubernetes/federation/pkg/federation-controller/ingress"
+	ingressdnscontroller "k8s.io/kubernetes/federation/pkg/federation-controller/ingress/dns"
 	namespacecontroller "k8s.io/kubernetes/federation/pkg/federation-controller/namespace"
 	replicasetcontroller "k8s.io/kubernetes/federation/pkg/federation-controller/replicaset"
 	servicecontroller "k8s.io/kubernetes/federation/pkg/federation-controller/service"
@@ -185,6 +186,17 @@ func StartControllers(s *options.CMServer, restClientCfg *restclient.Config) err
 	}
 
 	if controllerEnabled(s.Controllers, serverResources, ingresscontroller.ControllerName, ingresscontroller.RequiredResources, true) {
+
+		if controllerEnabled(s.Controllers, serverResources, ingressdnscontroller.ControllerName, ingresscontroller.RequiredResources, true) {
+			ingressDNScontrollerClientset := federationclientset.NewForConfigOrDie(restclient.AddUserAgent(restClientCfg, ingressdnscontroller.UserAgentName))
+			ingressDNSController, err := ingressdnscontroller.NewIngressDNSController(ingressDNScontrollerClientset, s.DnsProvider, s.DnsConfigFile, s.FederationName, s.ServiceDnsSuffix, s.ZoneName, s.ZoneID)
+			if err != nil {
+				glog.Fatalf("Failed to start service dns controller: %v", err)
+			} else {
+				go ingressDNSController.DNSControllerRun(s.ConcurrentServiceSyncs, wait.NeverStop)
+			}
+		}
+
 		glog.V(3).Infof("Loading client config for ingress controller %q", ingresscontroller.UserAgentName)
 		ingClientset := federationclientset.NewForConfigOrDie(restclient.AddUserAgent(restClientCfg, ingresscontroller.UserAgentName))
 		ingressController := ingresscontroller.NewIngressController(ingClientset)

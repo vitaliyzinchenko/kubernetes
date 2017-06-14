@@ -18,6 +18,7 @@ package ingress
 
 import (
 	"crypto/md5"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -52,6 +53,7 @@ const (
 	allClustersKey = ".ALL_CLUSTERS"
 	// TODO: Get the constants below directly from the Kubernetes Ingress Controller constants - but thats in a separate repo
 	globalIngressType 	= "kubernetes.io/ingress.global-type" 		// The writable annotation on Ingress to tell the controller to use a global ingress types
+	GlobalIngressLBStatus 	= "kubernetes.io/ingress.global-ingress-lb-status" 		// The writable annotation on Ingress with cluster level ingress lb status
 	staticIPNameKeyWritable = "kubernetes.io/ingress.global-static-ip-name" // The writable annotation on Ingress to tell the controller to use a specific, named, static IP
 	staticIPNameKeyReadonly = "ingress.kubernetes.io/static-ip"             // The readonly key via which the cluster's Ingress Controller communicates which static IP it used.  If staticIPNameKeyWritable above is specified, it is used.
 	uidAnnotationKey        = "kubernetes.io/ingress.uid"                   // The annotation on federation clusters, where we store the ingress UID
@@ -118,6 +120,7 @@ type IngressController struct {
 	clusterAvailableDelay time.Duration
 	smallDelay            time.Duration
 	updateTimeout         time.Duration
+	checkForIngressUID    bool
 }
 
 // NewIngressController returns a new ingress controller
@@ -133,6 +136,7 @@ func NewIngressController(client federationclientset.Interface) *IngressControll
 		clusterAvailableDelay: time.Second * 20,
 		smallDelay:            time.Second * 3,
 		updateTimeout:         time.Second * 30,
+		checkForIngressUID:    false,
 		ingressBackoff:        flowcontrol.NewBackOff(5*time.Second, time.Minute),
 		eventRecorder:         recorder,
 		configMapBackoff:      flowcontrol.NewBackOff(5*time.Second, time.Minute),
@@ -489,13 +493,16 @@ func (ic *IngressController) reconcileConfigMapForCluster(clusterName string) {
 				logmsg = fmt.Sprintf("%v: %v", logmsg, err)
 			}
 			if len(ic.ingressInformerStore.List()) > 0 { // Error-level if ingresses are active, Info-level otherwise.
-				glog.Errorf(logmsg)
+				if ic.checkForIngressUID {
+					glog.Errorf(logmsg)
+				}
 			} else {
 				glog.V(4).Infof(logmsg)
 			}
 			ic.configMapDeliverer.DeliverAfter(clusterName, nil, ic.configMapReviewDelay)
 			return
 		}
+
 		glog.V(4).Infof("Successfully got ConfigMap %q for cluster %q.", uidConfigMapNamespacedName, clusterName)
 		configMap, ok := configMapObj.(*v1.ConfigMap)
 		if !ok {
@@ -739,6 +746,9 @@ func (ic *IngressController) reconcileIngress(ingress types.NamespacedName) {
 
 	_, baseGlobalTypeExists := baseIngress.ObjectMeta.Annotations[globalIngressType]
 
+	var globalLbStat map[string][]v1.LoadBalancerStatus
+	globalLbStat = make(map[string][]v1.LoadBalancerStatus)
+
 	for _, cluster := range clusters {
 		baseIPName, baseIPAnnotationExists := baseIngress.ObjectMeta.Annotations[staticIPNameKeyWritable]
 		firstClusterName, firstClusterExists := baseIngress.ObjectMeta.Annotations[firstClusterAnnotation]
@@ -854,6 +864,18 @@ func (ic *IngressController) reconcileIngress(ingress types.NamespacedName) {
 			} else {
 				glog.V(4).Infof(logStr, "Not transferring")
 			}
+
+			if clusterLBStatusExists {
+				lbstatusObj, lbErr1 := api.Scheme.DeepCopy(&clusterIngress.Status.LoadBalancer)
+				lbstatus, ok1 := lbstatusObj.(*v1.LoadBalancerStatus)
+				if lbErr1 != nil || !ok1 {
+					glog.Errorf("Internal error: Failed to clone LoadBalancerStatus of %q in cluster %q while attempting to update master Global Load Balancer ingress status, will try again later. error: %v, Object to be cloned: %v", ingress, cluster.Name, lbErr1, lbstatusObj)
+					ic.deliverIngress(ingress, ic.ingressReviewDelay, true)
+					return
+				}
+				glog.V(4).Infof("Got Ingress LB Status for cluster:%s lbstatus %v", cluster.Name, lbstatusObj)
+				globalLbStat[cluster.Name] = append(globalLbStat[cluster.Name], *lbstatus)
+			}
 			// Update existing cluster ingress, if needed.
 			if util.ObjectMetaAndSpecEquivalent(baseIngress, clusterIngress) {
 				glog.V(4).Infof("Ingress %q in cluster %q does not need an update: cluster ingress is equivalent to federated ingress", ingress, cluster.Name)
@@ -897,6 +919,22 @@ func (ic *IngressController) reconcileIngress(ingress types.NamespacedName) {
 		}
 	}
 
+	baseGlobalLBStatus, baseGlobalLBStatusExists := baseIngress.ObjectMeta.Annotations[GlobalIngressLBStatus]
+	globalLbStatStr := buildGlobalLbStatusAnnotation(globalLbStat)
+	glog.V(4).Infof("Ingress Global LB Status: %v", globalLbStatStr)
+
+	if baseGlobalLBStatusExists {
+		if globalLbStatStr != baseGlobalLBStatus {
+			ic.updateAnnotationOnIngress(baseIngress, GlobalIngressLBStatus, globalLbStatStr)
+			glog.V(4).Infof("Updated base Ingress Globa LB Status: %s", baseIngress)
+			return
+		}
+	} else {
+		ic.updateAnnotationOnIngress(baseIngress, GlobalIngressLBStatus, globalLbStatStr)
+		glog.V(4).Infof("Updated base Ingress Globa LB Status: %s", baseIngress)
+		return
+	}
+
 	if len(operations) == 0 {
 		// Everything is in order
 		glog.V(4).Infof("Ingress %q is up-to-date in all clusters - no propagation to clusters required.", ingress)
@@ -931,4 +969,9 @@ func (ic *IngressController) delete(ingress *extensionsv1beta1.Ingress) error {
 		}
 	}
 	return nil
+}
+
+func buildGlobalLbStatusAnnotation(globalLbStat map[string][]v1.LoadBalancerStatus) string {
+	annotationBytes, _ := json.Marshal(globalLbStat)
+	return string(annotationBytes[:])
 }

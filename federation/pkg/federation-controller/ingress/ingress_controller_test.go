@@ -51,6 +51,7 @@ const (
 )
 
 func TestIngressController(t *testing.T) {
+	t.Log("Starting my test")
 	fakeClusterList := federationapi.ClusterList{Items: []federationapi.Cluster{}}
 	fakeConfigMapList1 := apiv1.ConfigMapList{Items: []apiv1.ConfigMap{}}
 	fakeConfigMapList2 := apiv1.ConfigMapList{Items: []apiv1.ConfigMap{}}
@@ -84,6 +85,7 @@ func TestIngressController(t *testing.T) {
 	cluster2IngressWatch := RegisterFakeWatch(ingresses, &cluster2Client.Fake)
 	cluster2ConfigMapWatch := RegisterFakeWatch(configmaps, &cluster2Client.Fake)
 	cluster2IngressCreateChan := RegisterFakeCopyOnCreate(ingresses, &cluster2Client.Fake, cluster2IngressWatch)
+	cluster2IngressUpdateChan := RegisterFakeCopyOnUpdate(ingresses, &cluster2Client.Fake, cluster2IngressWatch)
 	cluster2ConfigMapUpdateChan := RegisterFakeCopyOnUpdate(configmaps, &cluster2Client.Fake, cluster2ConfigMapWatch)
 
 	clientFactoryFunc := func(cluster *federationapi.Cluster) (kubeclientset.Interface, error) {
@@ -105,7 +107,7 @@ func TestIngressController(t *testing.T) {
 	ingressController.ingressReviewDelay = 100 * time.Millisecond
 	ingressController.configMapReviewDelay = 100 * time.Millisecond
 	ingressController.smallDelay = 100 * time.Millisecond
-	ingressController.updateTimeout = 5 * time.Second
+	ingressController.updateTimeout = 60 * time.Second
 
 	stop := make(chan struct{})
 	t.Log("Running Ingress Controller")
@@ -167,8 +169,16 @@ func TestIngressController(t *testing.T) {
 
 	t.Log("Checking that Ingress was correctly created in cluster 1")
 	createdIngress := GetIngressFromChan(t, cluster1IngressCreateChan)
+
+	createdCluster2Ingress := GetIngressFromChan(t, cluster2IngressCreateChan)
+	assert.NotNil(t, createdCluster2Ingress)
+
 	assert.NotNil(t, createdIngress)
 	cluster1Ingress := *createdIngress
+
+	updatedIngressWithLbStat := GetIngressFromChan(t, fedIngressUpdateChan)
+	fedIngress = *updatedIngressWithLbStat
+
 	assert.True(t, reflect.DeepEqual(fedIngress.Spec, cluster1Ingress.Spec), "Spec of created ingress is not equal")
 	assert.True(t, util.ObjectMetaEquivalent(fedIngress.ObjectMeta, cluster1Ingress.ObjectMeta),
 		"Metadata of created object is not equivalent")
@@ -251,6 +261,21 @@ func TestIngressController(t *testing.T) {
 		}
 	}
 
+	var updatedIngressCluster2 *extensionsv1beta1.Ingress
+
+	for trial := 0; trial < maxTrials; trial++ {
+		updatedIngressCluster2 = GetIngressFromChan(t, cluster2IngressUpdateChan)
+		assert.NotNil(t, updatedIngressCluster2)
+		if updatedIngressCluster2 == nil {
+			return
+		}
+		if reflect.DeepEqual(fedIngress.Spec, updatedIngress.Spec) &&
+			updatedIngress2.ObjectMeta.Annotations["A"] == fedIngress.ObjectMeta.Annotations["A"] {
+			break
+		}
+	}
+
+
 	assert.True(t, reflect.DeepEqual(updatedIngress2.Spec, fedIngress.Spec), "Spec of updated ingress is not equal")
 	assert.Equal(t, updatedIngress2.ObjectMeta.Annotations["A"], fedIngress.ObjectMeta.Annotations["A"], "Updated annotation not transferred from federated to cluster ingress.")
 
@@ -258,7 +283,7 @@ func TestIngressController(t *testing.T) {
 	fedIngressWatch.Modify(&fedIngress)
 
 	t.Log("Checking that the ingress got created in cluster 2 after a global ip was assigned")
-	createdIngress2 := GetIngressFromChan(t, cluster2IngressCreateChan)
+	createdIngress2 := GetIngressFromChan(t, cluster2IngressUpdateChan)
 	assert.NotNil(t, createdIngress2)
 	assert.True(t, reflect.DeepEqual(fedIngress.Spec, createdIngress2.Spec), "Spec of created ingress is not equal")
 	t.Logf("created meta: %v fed meta: %v", createdIngress2.ObjectMeta, fedIngress.ObjectMeta)
