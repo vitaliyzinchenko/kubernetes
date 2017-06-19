@@ -60,6 +60,8 @@ func (rrsets ResourceRecordSets) Get(name string) ([]dnsprovider.ResourceRecordS
 
 	var list []dnsprovider.ResourceRecordSet
 
+	rrsetMap := make(map[string]ResourceRecordSet)
+
 	for _, node := range response.Node.Nodes {
 		service := dnsmsg.Service{}
 		err = json.Unmarshal([]byte(node.Value), &service)
@@ -67,20 +69,37 @@ func (rrsets ResourceRecordSets) Get(name string) ([]dnsprovider.ResourceRecordS
 			return nil, fmt.Errorf("Failed to unmarshall json data, err: %v", err)
 		}
 
-		rrset := ResourceRecordSet{name: name, rrdatas: []string{}, rrsets: &rrsets}
 		ip := net.ParseIP(service.Host)
+		var recordType rrstype.RrsType
 		switch {
 		case ip == nil:
-			rrset.rrsType = rrstype.CNAME
+			recordType = rrstype.CNAME
 		case ip.To4() != nil:
-			rrset.rrsType = rrstype.A
+			recordType = rrstype.A
 		case ip.To16() != nil:
-			rrset.rrsType = rrstype.AAAA
+			recordType = rrstype.AAAA
 		default:
 			// Cannot occur
 		}
-		rrset.rrdatas = append(rrset.rrdatas, service.Host)
-		rrset.ttl = int64(service.TTL)
+
+		// We don't want to create a new rrset for each ip, instead we need to group rrsets by name/type and add IPs/Hosts as rrdatas array
+		key := name + "::" + fmt.Sprintf("%s", recordType)
+
+		if rrset, ok := rrsetMap[key]; ok {
+			rrset.rrdatas = append(rrset.rrdatas, service.Host)
+			rrsetMap[key] = rrset
+			glog.V(4).Infof("Debug Recordset %v already exists in the map with key %s. append host %s", rrset, key, service.Host)
+		} else {
+			rrset := ResourceRecordSet{name: name, rrdatas: []string{}, rrsets: &rrsets}
+			rrset.rrdatas = append(rrset.rrdatas, service.Host)
+			rrset.ttl = int64(service.TTL)
+			rrsetMap[key] = rrset
+			glog.V(4).Infof("Debug Created new rrset in the map %v with key %s", rrset, key)
+
+		}
+	}
+
+	for _, rrset := range rrsetMap {
 		list = append(list, rrset)
 	}
 

@@ -115,12 +115,13 @@ type IngressController struct {
 
 	deletionHelper *deletionhelper.DeletionHelper
 
-	ingressReviewDelay    time.Duration
-	configMapReviewDelay  time.Duration
-	clusterAvailableDelay time.Duration
-	smallDelay            time.Duration
-	updateTimeout         time.Duration
-	checkForIngressUID    bool
+	ingressReviewDelay      time.Duration
+	configMapReviewDelay    time.Duration
+	clusterAvailableDelay   time.Duration
+	clusterUnavailableDelay time.Duration
+	smallDelay              time.Duration
+	updateTimeout           time.Duration
+	checkForIngressUID      bool
 }
 
 // NewIngressController returns a new ingress controller
@@ -130,12 +131,13 @@ func NewIngressController(client federationclientset.Interface) *IngressControll
 	broadcaster.StartRecordingToSink(eventsink.NewFederatedEventSink(client))
 	recorder := broadcaster.NewRecorder(api.Scheme, clientv1.EventSource{Component: UserAgentName})
 	ic := &IngressController{
-		federatedApiClient:    client,
-		ingressReviewDelay:    time.Second * 10,
-		configMapReviewDelay:  time.Second * 10,
-		clusterAvailableDelay: time.Second * 20,
-		smallDelay:            time.Second * 3,
-		updateTimeout:         time.Second * 30,
+		federatedApiClient:    	 client,
+		ingressReviewDelay:    	 time.Second * 10,
+		configMapReviewDelay:  	 time.Second * 10,
+		clusterAvailableDelay: 	 time.Second * 5,
+		clusterUnavailableDelay: time.Second * 5,
+		smallDelay:              time.Second * 3,
+		updateTimeout:           time.Second * 30,
 		checkForIngressUID:    false,
 		ingressBackoff:        flowcontrol.NewBackOff(5*time.Second, time.Minute),
 		eventRecorder:         recorder,
@@ -193,6 +195,10 @@ func NewIngressController(client federationclientset.Interface) *IngressControll
 			ClusterAvailable: func(cluster *federationapi.Cluster) {
 				// When new cluster becomes available process all the ingresses again, and configure it's ingress controller's configmap with the correct UID
 				ic.clusterDeliverer.DeliverAfter(cluster.Name, cluster, ic.clusterAvailableDelay)
+			},
+			ClusterUnavailable: func(cluster *federationapi.Cluster, _ []interface{}) {
+				// When new cluster becomes unavailable process all the ingresses again, and configure it's ingress controller's configmap with the correct UID
+				ic.clusterDeliverer.DeliverAfter(cluster.Name, cluster, ic.clusterUnavailableDelay)
 			},
 		},
 	)

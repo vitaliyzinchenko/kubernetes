@@ -17,7 +17,6 @@ go_test(
         "//federation/apis/federation/v1beta1:go_default_library",
         "//federation/client/clientset_generated/federation_clientset/fake:go_default_library",
         "//federation/pkg/dnsprovider/providers/google/clouddns:go_default_library",
-        "//federation/pkg/federation-controller/service/ingress:go_default_library",
         "//federation/pkg/federation-controller/util/test:go_default_library",
         "//pkg/api/v1:go_default_library",
         "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:go_default_library",

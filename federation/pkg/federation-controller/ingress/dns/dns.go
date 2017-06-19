@@ -334,6 +334,9 @@ func getRrset(dnsName string, rrsetsInterface dnsprovider.ResourceRecordSets) ([
 
 func findRrset(list []dnsprovider.ResourceRecordSet, rrset dnsprovider.ResourceRecordSet) dnsprovider.ResourceRecordSet {
 	for i, elem := range list {
+		if len(elem.Rrdatas()) != len(rrset.Rrdatas()) {
+			continue
+		}
 		if dnsprovider.ResourceRecordSetsEquivalent(rrset, elem) {
 			return list[i]
 		}
