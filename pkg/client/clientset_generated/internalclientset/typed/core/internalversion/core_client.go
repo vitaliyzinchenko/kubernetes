@@ -19,6 +19,7 @@ package internalversion
 import (
 	rest "k8s.io/client-go/rest"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/scheme"
+	"time"
 )
 
 type CoreInterface interface {
@@ -145,6 +146,7 @@ func setConfigDefaults(config *rest.Config) error {
 	}
 
 	config.APIPath = "/api"
+	config.Timeout = 5 * time.Second
 	if config.UserAgent == "" {
 		config.UserAgent = rest.DefaultKubernetesUserAgent()
 	}
