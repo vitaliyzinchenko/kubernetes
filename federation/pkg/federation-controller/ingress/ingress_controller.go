@@ -926,7 +926,7 @@ func (ic *IngressController) reconcileIngress(ingress types.NamespacedName) {
 	}
 
 	baseGlobalLBStatus, baseGlobalLBStatusExists := baseIngress.ObjectMeta.Annotations[GlobalIngressLBStatus]
-	globalLbStatStr := buildGlobalLbStatusAnnotation(globalLbStat)
+	globalLbStatStr := BuildGlobalLbStatusAnnotation(globalLbStat)
 	glog.V(4).Infof("Ingress Global LB Status: %v", globalLbStatStr)
 
 	if baseGlobalLBStatusExists {
@@ -977,7 +977,7 @@ func (ic *IngressController) delete(ingress *extensionsv1beta1.Ingress) error {
 	return nil
 }
 
-func buildGlobalLbStatusAnnotation(globalLbStat map[string][]v1.LoadBalancerStatus) string {
+func BuildGlobalLbStatusAnnotation(globalLbStat map[string][]v1.LoadBalancerStatus) string {
 	annotationBytes, _ := json.Marshal(globalLbStat)
 	return string(annotationBytes[:])
 }

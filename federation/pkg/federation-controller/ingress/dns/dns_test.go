@@ -18,7 +18,7 @@ package dns
 
 import (
 	"fmt"
-	//"reflect"
+	"reflect"
 	"sort"
 	"testing"
 	//"time"
@@ -63,16 +63,18 @@ func TestServiceController_ensureDnsRecords(t *testing.T) {
 		{
 			name: "ServiceWithSingleLBIngress",
 			ingress: extensionsv1beta1.Ingress{
-				//ObjectMeta.Annotations[GlobalIngressLBStatus]
 
 				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
-					ic.GlobalIngressLBStatus: ""},
+					ic.GlobalIngressLBStatus: BuildAnnotation(map[string][]string{
+						cluster1Name : {"198.51.100.1", "198.51.100.2"},
+						cluster2Name : {},
+					})},
 				},
 			},
 			expected: []string{
-				"example.com:" + globalDNSName + ":A:180:[198.51.100.1]",
-				"example.com:" + fooRegionDNSName + ":A:180:[198.51.100.1]",
-				"example.com:" + fooZoneDNSName + ":A:180:[198.51.100.1]",
+				"example.com:" + globalDNSName + ":A:180:[198.51.100.1 198.51.100.2]",
+				"example.com:" + fooRegionDNSName + ":A:180:[198.51.100.1 198.51.100.2]",
+				"example.com:" + fooZoneDNSName + ":A:180:[198.51.100.1 198.51.100.2]",
 				"example.com:" + barRegionDNSName + ":CNAME:180:[" + globalDNSName + "]",
 				"example.com:" + barZoneDNSName + ":CNAME:180:[" + barRegionDNSName + "]",
 			},
@@ -101,16 +103,11 @@ func TestServiceController_ensureDnsRecords(t *testing.T) {
 			t.Errorf("Test failed for %s, Get DNS Zones failed: %v", test.name, err)
 		}
 		d.dnsZone = dnsZones[0]
-		test.ingress.Name = "ingressname"
-		test.ingress.Namespace = "ingressnamespace"
-		/*
-		ingress, err := ingress.ParseFederatedServiceIngress(&test.service)
-		if err != nil {
-			t.Errorf("Error in parsing lb ingress for service %s/%s: %v", test.service.Namespace, test.service.Name, err)
-			return
-		}*/
+		test.ingress.Name = "ingname"
+		test.ingress.Namespace = "ingns"
 
-		d.ensureDNSRecords(test.name, &test.ingress)
+		d.ensureDNSRecords(cluster1Name, &test.ingress)
+		d.ensureDNSRecords(cluster2Name, &test.ingress)
 
 		zones, err := fakednsZones.List()
 		if err != nil {
@@ -143,12 +140,25 @@ func TestServiceController_ensureDnsRecords(t *testing.T) {
 		// Ignore order of records
 		sort.Strings(records)
 		sort.Strings(test.expected)
-		/*
+		t.Logf("%v \n", records)
+
 		if !reflect.DeepEqual(records, test.expected) {
 			t.Errorf("Test %q failed.  Actual=%v, Expected=%v", test.name, records, test.expected)
 		}
-		*/
 
 	}
+}
+
+func BuildAnnotation(clusters map[string][]string) string {
+	globalLbStat := make(map[string][]v1.LoadBalancerStatus)
+	for clusterName, hosts := range clusters {
+		lbStatus := v1.LoadBalancerStatus{Ingress: make([]v1.LoadBalancerIngress, len(hosts))}
+		for i := 0; i <  len(hosts); i++{
+			lbStatus.Ingress[i] = v1.LoadBalancerIngress{IP: hosts[i]}
+		}
+		globalLbStat[clusterName] = append(globalLbStat[clusterName], lbStatus)
+	}
+
+	return ic.BuildGlobalLbStatusAnnotation(globalLbStat)
 
 }
