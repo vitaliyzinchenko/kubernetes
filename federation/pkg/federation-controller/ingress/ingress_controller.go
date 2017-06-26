@@ -68,6 +68,7 @@ const (
 	firstClusterAnnotation = "ingress.federation.kubernetes.io/first-cluster"
 	ControllerName         = "ingresses"
 	UserAgentName          = "federation-ingresses-controller"
+	ingressReSyncPeriod = 30 * time.Second
 )
 
 var (
@@ -160,7 +161,8 @@ func NewIngressController(client federationclientset.Interface) *IngressControll
 			},
 		},
 		&extensionsv1beta1.Ingress{},
-		controller.NoResyncPeriodFunc(),
+		ingressReSyncPeriod,
+		//controller.NoResyncPeriodFunc(),
 		util.NewTriggerOnAllChanges(
 			func(obj pkgruntime.Object) {
 				ic.deliverIngressObj(obj, 0, false)
@@ -181,7 +183,8 @@ func NewIngressController(client federationclientset.Interface) *IngressControll
 					},
 				},
 				&extensionsv1beta1.Ingress{},
-				controller.NoResyncPeriodFunc(),
+				ingressReSyncPeriod,
+				//controller.NoResyncPeriodFunc(),
 				// Trigger reconciliation whenever something in federated cluster is changed. In most cases it
 				// would be just confirmation that some ingress operation succeeded.
 				util.NewTriggerOnAllChanges(

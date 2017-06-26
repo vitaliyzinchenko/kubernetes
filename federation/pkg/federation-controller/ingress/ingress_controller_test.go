@@ -162,19 +162,20 @@ func TestIngressController(t *testing.T) {
 
 	t.Log("Checking that appropriate finalizers are added")
 	// There should be an update to add both the finalizers.
-	updatedIngress := GetIngressFromChan(t, fedIngressUpdateChan)
-	AssertHasFinalizer(t, updatedIngress, deletionhelper.FinalizerDeleteFromUnderlyingClusters)
-	AssertHasFinalizer(t, updatedIngress, metav1.FinalizerOrphanDependents)
-	fedIngress = *updatedIngress
+	updatedFedIngress := GetIngressFromChan(t, fedIngressUpdateChan)
+	AssertHasFinalizer(t, updatedFedIngress, deletionhelper.FinalizerDeleteFromUnderlyingClusters)
+	AssertHasFinalizer(t, updatedFedIngress, metav1.FinalizerOrphanDependents)
+	fedIngress = *updatedFedIngress
 
 	t.Log("Checking that Ingress was correctly created in cluster 1")
-	createdIngress := GetIngressFromChan(t, cluster1IngressCreateChan)
+	createdCluster1Ingress := GetIngressFromChan(t, cluster1IngressCreateChan)
+	assert.NotNil(t, createdCluster1Ingress)
+	cluster1Ingress := *createdCluster1Ingress
 
 	createdCluster2Ingress := GetIngressFromChan(t, cluster2IngressCreateChan)
 	assert.NotNil(t, createdCluster2Ingress)
+	cluster2Ingress := *createdCluster2Ingress
 
-	assert.NotNil(t, createdIngress)
-	cluster1Ingress := *createdIngress
 
 	updatedIngressWithLbStat := GetIngressFromChan(t, fedIngressUpdateChan)
 	fedIngress = *updatedIngressWithLbStat
@@ -183,13 +184,18 @@ func TestIngressController(t *testing.T) {
 	assert.True(t, util.ObjectMetaEquivalent(fedIngress.ObjectMeta, cluster1Ingress.ObjectMeta),
 		"Metadata of created object is not equivalent")
 
+	assert.True(t, reflect.DeepEqual(fedIngress.Spec, cluster2Ingress.Spec), "Spec of created ingress is not equal")
+	assert.True(t, util.ObjectMetaEquivalent(fedIngress.ObjectMeta, cluster2Ingress.ObjectMeta),
+		"Metadata of created object is not equivalent")
+
+
 	// Wait for finalizers to appear in federation store.
 	assert.NoError(t, WaitForFinalizersInFederationStore(ingressController, ingressController.ingressInformerStore,
 		types.NamespacedName{Namespace: fedIngress.Namespace, Name: fedIngress.Name}.String()), "finalizers not found in federated ingress")
 
 	// Wait for the cluster ingress to appear in cluster store.
 	assert.NoError(t, WaitForIngressInClusterStore(ingressController.ingressFederatedInformer.GetTargetStore(), cluster1.Name,
-		types.NamespacedName{Namespace: createdIngress.Namespace, Name: createdIngress.Name}.String()),
+		types.NamespacedName{Namespace: createdCluster1Ingress.Namespace, Name: createdCluster1Ingress.Name}.String()),
 		"Created ingress not found in underlying cluster store")
 
 	// Test that IP address gets transferred from cluster ingress to federated ingress.
@@ -201,42 +207,41 @@ func TestIngressController(t *testing.T) {
 	for trial := 0; trial < maxTrials; trial++ {
 		cluster1IngressWatch.Modify(&cluster1Ingress)
 		// Wait for store to see the updated cluster ingress.
-		key := types.NamespacedName{Namespace: createdIngress.Namespace, Name: createdIngress.Name}.String()
+		key := types.NamespacedName{Namespace: createdCluster1Ingress.Namespace, Name: createdCluster1Ingress.Name}.String()
 		if err := WaitForStatusUpdate(t, ingressController.ingressFederatedInformer.GetTargetStore(),
-			cluster1.Name, key, cluster1Ingress.Status.LoadBalancer, time.Second); err != nil {
+			cluster1.Name, key, cluster1Ingress.Status.LoadBalancer, 1*time.Second); err != nil {
 			continue
 		}
 		if err := WaitForFedStatusUpdate(t, ingressController.ingressInformerStore,
-			key, cluster1Ingress.Status.LoadBalancer, time.Second); err != nil {
+			key, cluster1Ingress.Status.LoadBalancer, 1*time.Second); err != nil {
 			continue
 		}
 	}
 
 	for trial := 0; trial < maxTrials; trial++ {
-		updatedIngress = GetIngressFromChan(t, fedIngressUpdateChan)
-		assert.NotNil(t, updatedIngress, "Cluster's ingress load balancer status was not correctly transferred to the federated ingress")
-		if updatedIngress == nil {
+		updatedFedIngress = GetIngressFromChan(t, fedIngressUpdateChan)
+		assert.NotNil(t, updatedFedIngress, "Cluster's ingress load balancer status was not correctly transferred to the federated ingress")
+		if updatedFedIngress == nil {
 			return
 		}
-		if reflect.DeepEqual(cluster1Ingress.Status.LoadBalancer.Ingress, updatedIngress.Status.LoadBalancer.Ingress) {
-			fedIngress.Status.LoadBalancer = updatedIngress.Status.LoadBalancer
+		if reflect.DeepEqual(cluster1Ingress.Status.LoadBalancer.Ingress, updatedFedIngress.Status.LoadBalancer.Ingress) {
+			fedIngress.Status.LoadBalancer = updatedFedIngress.Status.LoadBalancer
 			break
 		} else {
-			glog.Infof("Status check failed: expected: %v actual: %v", cluster1Ingress.Status, updatedIngress.Status)
+			glog.Infof("Status check failed: expected: %v actual: %v", cluster1Ingress.Status, updatedFedIngress.Status)
 		}
 	}
-	glog.Infof("Status check: expected: %v actual: %v", cluster1Ingress.Status, updatedIngress.Status)
-	assert.True(t, reflect.DeepEqual(cluster1Ingress.Status.LoadBalancer.Ingress, updatedIngress.Status.LoadBalancer.Ingress),
+	assert.True(t, reflect.DeepEqual(cluster1Ingress.Status.LoadBalancer.Ingress, updatedFedIngress.Status.LoadBalancer.Ingress),
 		fmt.Sprintf("Ingress IP was not transferred from cluster ingress to federated ingress.  %v is not equal to %v",
-			cluster1Ingress.Status.LoadBalancer.Ingress, updatedIngress.Status.LoadBalancer.Ingress))
+			cluster1Ingress.Status.LoadBalancer.Ingress, updatedFedIngress.Status.LoadBalancer.Ingress))
 
 	assert.NoError(t, WaitForStatusUpdate(t, ingressController.ingressFederatedInformer.GetTargetStore(),
-		cluster1.Name, types.NamespacedName{Namespace: createdIngress.Namespace, Name: createdIngress.Name}.String(),
+		cluster1.Name, types.NamespacedName{Namespace: updatedFedIngress.Namespace, Name: updatedFedIngress.Name}.String(),
 		cluster1Ingress.Status.LoadBalancer, time.Second))
+
 	assert.NoError(t, WaitForFedStatusUpdate(t, ingressController.ingressInformerStore,
-		types.NamespacedName{Namespace: createdIngress.Namespace, Name: createdIngress.Name}.String(),
+		types.NamespacedName{Namespace: updatedFedIngress.Namespace, Name: updatedFedIngress.Name}.String(),
 		cluster1Ingress.Status.LoadBalancer, time.Second))
-	t.Logf("expected: %v, actual: %v", createdIngress, updatedIngress)
 
 	// Test update federated ingress.
 	if fedIngress.ObjectMeta.Annotations == nil {
@@ -247,38 +252,43 @@ func TestIngressController(t *testing.T) {
 	t.Log("Modifying Federated Ingress")
 	fedIngressWatch.Modify(&fedIngress)
 	t.Log("Checking that Ingress was correctly updated in cluster 1")
-	var updatedIngress2 *extensionsv1beta1.Ingress
+
+	var updatedCluster1Ingress *extensionsv1beta1.Ingress
 
 	for trial := 0; trial < maxTrials; trial++ {
-		updatedIngress2 = GetIngressFromChan(t, cluster1IngressUpdateChan)
-		assert.NotNil(t, updatedIngress2)
-		if updatedIngress2 == nil {
+		updatedCluster1Ingress = GetIngressFromChan(t, cluster1IngressUpdateChan)
+		assert.NotNil(t, updatedCluster1Ingress)
+		if updatedCluster1Ingress == nil {
 			return
 		}
-		if reflect.DeepEqual(fedIngress.Spec, updatedIngress.Spec) &&
-			updatedIngress2.ObjectMeta.Annotations["A"] == fedIngress.ObjectMeta.Annotations["A"] {
+		if reflect.DeepEqual(fedIngress.Spec, updatedCluster1Ingress.Spec) &&
+			updatedCluster1Ingress.ObjectMeta.Annotations["A"] == fedIngress.ObjectMeta.Annotations["A"] {
 			break
 		}
 	}
 
-	var updatedIngressCluster2 *extensionsv1beta1.Ingress
+	var updatedCluster2Ingress *extensionsv1beta1.Ingress
 
 	for trial := 0; trial < maxTrials; trial++ {
-		updatedIngressCluster2 = GetIngressFromChan(t, cluster2IngressUpdateChan)
-		assert.NotNil(t, updatedIngressCluster2)
-		if updatedIngressCluster2 == nil {
+		updatedCluster2Ingress = GetIngressFromChan(t, cluster2IngressUpdateChan)
+		assert.NotNil(t, updatedCluster2Ingress)
+		if updatedCluster2Ingress == nil {
 			return
 		}
-		if reflect.DeepEqual(fedIngress.Spec, updatedIngress.Spec) &&
-			updatedIngress2.ObjectMeta.Annotations["A"] == fedIngress.ObjectMeta.Annotations["A"] {
+		if reflect.DeepEqual(fedIngress.Spec, updatedCluster2Ingress.Spec) &&
+			updatedCluster2Ingress.ObjectMeta.Annotations["A"] == fedIngress.ObjectMeta.Annotations["A"] {
 			break
 		}
 	}
 
 
-	assert.True(t, reflect.DeepEqual(updatedIngress2.Spec, fedIngress.Spec), "Spec of updated ingress is not equal")
-	assert.Equal(t, updatedIngress2.ObjectMeta.Annotations["A"], fedIngress.ObjectMeta.Annotations["A"], "Updated annotation not transferred from federated to cluster ingress.")
+	assert.True(t, reflect.DeepEqual(updatedCluster1Ingress.Spec, fedIngress.Spec), "Spec of updated ingress is not equal")
+	assert.Equal(t, updatedCluster1Ingress.ObjectMeta.Annotations["A"], fedIngress.ObjectMeta.Annotations["A"], "Updated annotation not transferred from federated to cluster ingress.")
 
+	assert.True(t, reflect.DeepEqual(updatedCluster2Ingress.Spec, fedIngress.Spec), "Spec of updated ingress is not equal")
+	assert.Equal(t, updatedCluster2Ingress.ObjectMeta.Annotations["A"], fedIngress.ObjectMeta.Annotations["A"], "Updated annotation not transferred from federated to cluster ingress.")
+
+	/*
 	fedIngress.Annotations[staticIPNameKeyWritable] = "foo" // Make sure that the base object has a static IP name first.
 	fedIngressWatch.Modify(&fedIngress)
 
@@ -288,6 +298,7 @@ func TestIngressController(t *testing.T) {
 	assert.True(t, reflect.DeepEqual(fedIngress.Spec, createdIngress2.Spec), "Spec of created ingress is not equal")
 	t.Logf("created meta: %v fed meta: %v", createdIngress2.ObjectMeta, fedIngress.ObjectMeta)
 	assert.True(t, util.ObjectMetaEquivalent(fedIngress.ObjectMeta, createdIngress2.ObjectMeta), "Metadata of created object is not equivalent")
+	*/
 
 	close(stop)
 }
