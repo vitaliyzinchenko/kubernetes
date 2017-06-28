@@ -36,6 +36,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/pkg/api/v1"
 	restclient "k8s.io/client-go/rest"
+	"time"
 )
 
 // defaultRetries is the number of times a resource discovery is repeated if an api group disappears on the fly (e.g. ThirdPartyResources).
@@ -410,6 +411,7 @@ func withRetries(maxRetries int, f func(failEarly bool) ([]*metav1.APIResourceLi
 func setDiscoveryDefaults(config *restclient.Config) error {
 	config.APIPath = ""
 	config.GroupVersion = nil
+	config.Timeout = 5 * time.Second
 	codec := runtime.NoopEncoder{Decoder: scheme.Codecs.UniversalDecoder()}
 	config.NegotiatedSerializer = serializer.NegotiatedSerializerWrapper(runtime.SerializerInfo{Serializer: codec})
 	if len(config.UserAgent) == 0 {
